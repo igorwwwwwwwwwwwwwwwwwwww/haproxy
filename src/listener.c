@@ -380,8 +380,8 @@ void stop_listener(struct listener *l, int lpx, int lpr, int lli)
 	struct proxy *px = l->bind_conf->frontend;
 
 	if (l->bind_conf->options & BC_O_NOSTOP) {
-		/* master-worker sockpairs are never closed but don't count as a
-		 * job.
+		/* master-worker sockpairs and "nostop" listeners are never
+		 * closed but don't count as a job (see unstoppable_jobs).
 		 */
 		return;
 	}
@@ -1292,6 +1292,10 @@ void __delete_listener(struct listener *listener)
 		shard_info_detach(&listener->rx);
 		listener->rx.proto->nb_receivers--;
 		_HA_ATOMIC_DEC(&jobs);
+		if (listener->flags & LI_F_UNSTOPPABLE) {
+			listener->flags &= ~LI_F_UNSTOPPABLE;
+			_HA_ATOMIC_DEC(&unstoppable_jobs);
+		}
 		_HA_ATOMIC_DEC(&listeners);
 	}
 }
@@ -2196,6 +2200,17 @@ int bind_complete_thread_setup(struct bind_conf *bind_conf, int *err_code)
 			li->luid = 0;
 			if (new_li->luid)
 				listener_index_id(fe, new_li);
+		}
+	}
+
+	/* counted after cloning so that each shard/group duplicate is one
+	 * job. The flag lets __delete_listener() undo exactly this, since
+	 * disabled proxies never get here.
+	 */
+	if (bind_conf->options & BC_O_NOSTOP) {
+		list_for_each_entry(li, &bind_conf->listeners, by_bind) {
+			li->flags |= LI_F_UNSTOPPABLE;
+			HA_ATOMIC_INC(&unstoppable_jobs);
 		}
 	}
 
