@@ -379,11 +379,13 @@ void stop_listener(struct listener *l, int lpx, int lpr, int lli)
 {
 	struct proxy *px = l->bind_conf->frontend;
 
-	if (l->bind_conf->options & BC_O_NOSTOP) {
-		/* master-worker sockpairs are never closed but don't count as a
-		 * job (see unstoppable_jobs).
+	if ((l->bind_conf->options & BC_O_NOSTOP) && stopping) {
+		/* kept across a soft-stop (see unstoppable_jobs), except a
+		 * "nostop" listener already sent to a new process or paused.
 		 */
-		return;
+		if (!(l->bind_conf->options & BC_O_NOSTOP_XFER) ||
+		    (!(l->rx.flags & RX_F_SENT) && l->state > LI_PAUSED))
+			return;
 	}
 
 	if (!lpx && px)
@@ -2203,9 +2205,8 @@ int bind_complete_thread_setup(struct bind_conf *bind_conf, int *err_code)
 		}
 	}
 
-	/* counted after cloning so that each shard/group duplicate is one
-	 * job. The flag lets __delete_listener() undo exactly this, since
-	 * disabled proxies never get here.
+	/* one unstoppable job per listener, counted after cloning. The
+	 * flag lets __delete_listener() undo it (disabled proxies skip this).
 	 */
 	if (bind_conf->options & BC_O_NOSTOP) {
 		list_for_each_entry(li, &bind_conf->listeners, by_bind) {
@@ -2930,6 +2931,13 @@ static int bind_parse_nice(char **args, int cur_arg, struct proxy *px, struct bi
 	return 0;
 }
 
+/* parse the "nostop" bind keyword */
+static int bind_parse_nostop(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
+{
+	conf->options |= BC_O_NOSTOP | BC_O_NOSTOP_XFER;
+	return 0;
+}
+
 /* parse the "process" bind keyword */
 static int bind_parse_process(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
 {
@@ -3097,6 +3105,7 @@ static struct bind_kw_list bind_kws = { "ALL", { }, {
 	{ "name",         bind_parse_name,         1, 1 }, /* set name of listening socket */
 	{ "nbconn",       bind_parse_nbconn,       1, 1 }, /* set number of connection on active preconnect */
 	{ "nice",         bind_parse_nice,         1, 0 }, /* set nice of listening socket */
+	{ "nostop",       bind_parse_nostop,       0, 0 }, /* keep listening during soft-stop */
 	{ "process",      bind_parse_process,      1, 0 }, /* set list of allowed process for this socket */
 	{ "proto",        bind_parse_proto,        1, 0 }, /* set the proto to use for all incoming connections */
 	{ "shards",       bind_parse_shards,       1, 0 }, /* set number of shards */

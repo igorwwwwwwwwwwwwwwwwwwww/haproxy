@@ -1,0 +1,87 @@
+varnishtest "nostop listener handed over on a master-worker reload"
+
+# The new worker takes the listening sockets from the old one over the
+# master CLI sockpair (_getsocks). The old worker must then unbind its
+# "nostop" listener on soft-stop, otherwise both workers would accept on
+# the same socket while the old one drains. The sockpair itself must stay
+# so that the master CLI can still reach the old worker.
+#
+# The nostop bind uses a real address rather than fd@: fd@ sockets are
+# inherited from the master by both workers and are never transferred.
+# ${h1_closed_sock} is the port vtest reserves and closes for unreachable
+# server tests, reused here as the only free non-fd@ address available.
+
+feature ignore_unknown_macro
+feature cmd "command -v socat"
+feature cmd "command -v grep"
+feature cmd "command -v sed"
+feature cmd "$HAPROXY_PROGRAM -cc 'version_atleast(3.5-dev0)'"
+
+# the master CLI is not available on osx in vtest
+#EXCLUDE_TARGETS=osx
+
+barrier b1 cond 2
+barrier b2 cond 2
+
+# s1 holds the request so that the old worker keeps draining
+server s1 {
+    rxreq
+    barrier b1 sync
+    barrier b2 sync
+    txresp
+} -start
+
+haproxy h1 -Ws -S -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+        nbthread 1
+    .endif
+        hard-stop-after "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend traffic
+        bind "fd@${traffic}"
+        default_backend be
+
+    backend be
+        server s1 ${s1_addr}:${s1_port}
+
+    frontend monitor
+        bind ${h1_closed_sock} nostop
+        http-request return status 200 hdr x-stopping "%[stopping]"
+} -start
+
+client c1 -connect ${h1_traffic_sock} {
+    txreq
+    rxresp
+    expect resp.status == 200
+} -start
+
+barrier b1 sync
+
+# reload, then check the old worker is still reachable through the master
+shell {
+    set -e
+    mcli() { socat -t1000 TCP:${h1_mcli_addr}:${h1_mcli_port} -; }
+    echo "reload" | mcli | grep -q 'Success=1'
+    old=$(echo "show proc" | mcli | sed -n '/^# old workers/{n;p;}' | cut -d' ' -f1)
+    test -n "$old"
+    echo "@!$old show info" | mcli | grep -q '^Stopping: 1'
+}
+
+# every connection must land on the new worker
+client c2 -connect ${h1_closed_sock} {
+    txreq
+    rxresp
+    expect resp.status == 200
+    expect resp.http.x-stopping == "0"
+} -repeat 20 -run
+
+barrier b2 sync
+client c1 -wait

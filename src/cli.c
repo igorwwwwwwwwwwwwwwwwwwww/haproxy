@@ -3012,6 +3012,14 @@ static int _getsocks(char **args, char *payload, struct appctx *appctx, void *pr
 		}
 	}
 
+	/* the new process has the listening FDs now, see BC_O_NOSTOP_XFER */
+	for (cur_fd = 0; cur_fd < global.maxsock; cur_fd++) {
+		if ((fdtab[cur_fd].state & FD_EXPORTED) && fdtab[cur_fd].iocb == sock_accept_iocb)
+			HA_ATOMIC_OR(&((struct listener *)fdtab[cur_fd].owner)->rx.flags, RX_F_SENT);
+	}
+	for (foreign_idx = 0; foreign_idx < nb_foreign; foreign_idx++)
+		HA_ATOMIC_OR(&foreign_rxs[foreign_idx]->flags, RX_F_SENT);
+
 out:
 	for (foreign_idx = 0; foreign_idx < nb_foreign; foreign_idx++)
 		close(foreign_fds[foreign_idx]);

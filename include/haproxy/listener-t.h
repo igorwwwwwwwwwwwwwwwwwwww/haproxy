@@ -115,6 +115,7 @@ enum li_status {
 #define BC_O_NOSTOP             0x00004000 /* keep the listeners active even after a soft stop */
 #define BC_O_REVERSE_HTTP       0x00008000 /* a reverse HTTP bind is used */
 #define BC_O_XPRT_MAXCONN       0x00010000 /* transport layer allocates its own resource prior to accept and is responsible to check maxconn limit */
+#define BC_O_NOSTOP_XFER        0x00020000 /* "nostop" keyword: unbind anyway once sent to a new process or paused */
 
 
 /* flags used with bind_conf->ssl_options */

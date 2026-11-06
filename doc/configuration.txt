@@ -2921,7 +2921,9 @@ grace <time>
   Please note that a more flexible and durable approach would instead consist
   for an orchestration system in setting a global variable from the CLI, use
   that variable to respond to external checks, then after a delay send the
-  SIGUSR1 signal.
+  SIGUSR1 signal. To leave only a monitoring or health check frontend bound
+  while the other listeners are unbound immediately, use the "nostop" bind
+  option (see section 5.1) instead.
 
   Example:
 
@@ -18753,6 +18755,42 @@ no-tlsv13
   cannot be enabled using any configuration option. This option is also
   available on global statement "ssl-default-bind-options". Use "ssl-min-ver"
   and "ssl-max-ver" instead.
+
+nostop
+  Does not unbind the sockets declared on this line during a soft-stop
+  (SIGUSR1). They continue to accept connections until the process exits. By
+  default a soft-stop unbinds every listener, including the ones serving the
+  stats page or the Prometheus exporter. The process then cannot be observed
+  while it finishes its remaining connections, which may take up to
+  "hard-stop-after". This is meant for monitoring or health check frontends
+  and the stats socket of processes that are stopped and replaced, for example
+  a container that is drained before being deleted, not for "peers" or
+  "log-forward" listeners.
+
+  The listener does not delay the exit: the process still exits once its last
+  connection is closed. The frontend is otherwise treated as stopped like any
+  other one: it is reported as STOP in the stats, "shutdown frontend" reports
+  it as already shut down, and keep-alive connections are closed after each
+  response, subject to "close-spread-time". A monitoring request only delays
+  the exit for its own duration. It is therefore not suited for a listener
+  that receives regular traffic.
+
+  On a reload the listener is handed over like any other one when the new
+  process receives the sockets from the old one ("-x", the default in
+  master-worker mode). When the new process binds its own socket instead
+  ("-sf" without "-x"), or when the socket was inherited by both ("fd@"),
+  both processes accept on it until the old one exits, and a monitoring
+  request may be answered by either.
+
+  Example:
+
+    frontend stats
+      bind :8404 nostop
+      http-request use-service prometheus-exporter if { path /metrics }
+      stats enable
+      stats uri /
+
+  See also : "grace", "hard-stop-after", "stopping".
 
 npn <protocols>
   This enables the NPN TLS extension and advertises the specified protocol list

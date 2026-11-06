@@ -40,6 +40,7 @@
 #define RX_F_NON_SUSPENDABLE    0x00000010  /* this socket cannot be suspended hence must always be unbound */
 #define RX_F_PASS_PKTINFO       0x00000020  /* pass pktinfo in received messages */
 #define RX_F_INHERITED_SOCK     0x00000040  /* inherited sock that could be duped from another local receiver */
+#define RX_F_SENT               0x00000080  /* FD was sent to a new process by _getsocks */
 
 /* Bit values for rx_settings->options */
 #define RX_O_FOREIGN            0x00000001  /* receives on foreign addresses */
