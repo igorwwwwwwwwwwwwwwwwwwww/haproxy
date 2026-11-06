@@ -2921,7 +2921,9 @@ grace <time>
   Please note that a more flexible and durable approach would instead consist
   for an orchestration system in setting a global variable from the CLI, use
   that variable to respond to external checks, then after a delay send the
-  SIGUSR1 signal.
+  SIGUSR1 signal. To leave only a monitoring or health check frontend bound
+  while the other listeners are unbound immediately, use the "nostop" bind
+  option (see section 5.1) instead.
 
   Example:
 
@@ -18753,6 +18755,50 @@ no-tlsv13
   cannot be enabled using any configuration option. This option is also
   available on global statement "ssl-default-bind-options". Use "ssl-min-ver"
   and "ssl-max-ver" instead.
+
+nostop
+  Does not unbind the sockets declared on this line during a soft-stop
+  (SIGUSR1). They continue to accept connections until the process exits. By
+  default a soft-stop unbinds every listener of the process, including the
+  ones serving the stats page or the Prometheus exporter. The process then
+  cannot be observed while it finishes its remaining connections, which may
+  take up to "hard-stop-after".
+
+  The listener itself does not delay the exit: the process still exits once
+  its last connection is closed, whichever listener accepted it. Once the
+  soft-stop has started, the frontend is treated as stopped like any other
+  one, while this listener still accepts connections: it is reported as STOP
+  in the stats, its stick table is purged, the health checks of a "listen"
+  section stop, memory pools are flushed after each request, and "shutdown
+  frontend" reports it as already shut down. It is therefore not suited for a
+  listener that receives regular traffic.
+
+  In HTTP mode, keep-alive connections on a stopped frontend are switched to
+  close mode, so a monitoring request only delays the exit for its own
+  duration. With "close-spread-time" set, this is spread over the configured
+  window, and with "close-spread-time 0" connections are not closed at all: a
+  client holding a persistent connection then delays the exit until "timeout
+  client" or "hard-stop-after". The "stopping" sample fetch is not affected.
+
+  This is intended for monitoring or health check frontends of processes that
+  are stopped and then replaced, for example a container that is drained before
+  being deleted. On a reload the old process keeps the socket open until it
+  exits. If the new process inherits the listening sockets (master-worker
+  mode, "-x"), both processes accept from the same socket. If it binds its
+  own, this requires SO_REUSEPORT, which is the default unless "noreuseport"
+  is set, otherwise the bind fails. Either way a monitoring request may be
+  answered by either process while the old one is draining. The old process
+  cannot tell a reload from a stop, so this applies to every soft-stop.
+
+  Example:
+
+    frontend stats
+      bind :8404 nostop
+      http-request use-service prometheus-exporter if { path /metrics }
+      stats enable
+      stats uri /
+
+  See also : "grace", "hard-stop-after", "stopping".
 
 npn <protocols>
   This enables the NPN TLS extension and advertises the specified protocol list

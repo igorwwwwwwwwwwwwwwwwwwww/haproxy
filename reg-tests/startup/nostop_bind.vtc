@@ -1,0 +1,171 @@
+varnishtest "Test the nostop bind keyword"
+
+# A "nostop" listener is not unbound by a soft-stop and the frontend is
+# still marked stopped, so its keep-alive connections are closed after
+# each response. The process must still exit once the last connection
+# on the other listeners is closed. An explicit stop (disabled frontend
+# at startup, "shutdown frontend" on the CLI) closes the listener like
+# any other.
+
+feature ignore_unknown_macro
+feature cmd "$HAPROXY_PROGRAM -cc 'version_atleast(3.5-dev0)'"
+
+barrier b1 cond 2
+barrier b2 cond 2
+
+# Scenario 1: soft-stop with a connection in flight
+
+# s1 holds the request until the checks on the monitor frontend are done
+server s1 {
+    rxreq
+    barrier b1 sync
+    barrier b2 sync
+    txresp
+} -start
+
+haproxy h1 -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+        nbthread 1
+    .endif
+        hard-stop-after "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend traffic
+        bind "fd@${traffic}"
+        default_backend be
+
+    backend be
+        server s1 ${s1_addr}:${s1_port}
+
+    frontend monitor
+        bind "fd@${monitor}" nostop
+        http-request return status 200 hdr x-stopping "%[stopping]" hdr x-traffic-conn "%[fe_conn(traffic)]" if { path / }
+        stats enable
+        stats uri /stats
+} -start
+
+client c1 -connect ${h1_traffic_sock} {
+    txreq
+    rxresp
+    expect resp.status == 200
+} -start
+
+barrier b1 sync
+
+shell {
+    kill -USR1 ${h1_pid}
+}
+delay 0.5
+
+# the monitor listener accepts, reports the drain, and closes the connection
+client c2 -connect ${h1_monitor_sock} {
+    txreq -url /
+    rxresp
+    expect resp.status == 200
+    expect resp.http.x-stopping == "1"
+    expect resp.http.x-traffic-conn == "1"
+    expect resp.http.connection == "close"
+} -run
+
+# both frontends are reported stopped
+client c3 -connect ${h1_monitor_sock} {
+    txreq -url "/stats;csv"
+    rxresp
+    expect resp.status == 200
+    expect resp.body ~ "\ntraffic,FRONTEND,(?:[^,]*,){15}STOP,"
+    expect resp.body ~ "\nmonitor,FRONTEND,(?:[^,]*,){15}STOP,"
+} -run
+
+# once the response is delivered and the connection closed, the process
+# must exit on its own
+barrier b2 sync
+client c1 -wait
+
+# vtest has not reaped the process yet, so a zombie counts as exited.
+# busybox ps has no -p, hence /proc on Linux.
+shell {
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if [ -d /proc/self ]; then
+            [ -r /proc/${h1_pid}/status ] || exit 0
+            grep -q '^State:[[:space:]]*Z' /proc/${h1_pid}/status && exit 0
+        else
+            ps -o stat= -p $$ >/dev/null || exit 2
+            state=$(ps -o stat= -p ${h1_pid})
+            case "$state" in
+                ""|Z*) exit 0 ;;
+            esac
+        fi
+        sleep 0.1
+    done
+    echo "haproxy still running after the last connection closed"
+    exit 1
+}
+
+haproxy h1 -wait
+
+# Scenario 2: a disabled frontend with a nostop bind must start
+
+haproxy h2 -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+        nbthread 1
+    .endif
+
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend monitor
+        disabled
+        bind "fd@${monitor}" nostop
+        http-request return status 200
+} -start
+
+haproxy h2 -cli {
+    send "show info"
+    expect ~ "Unstoppable Jobs: 0"
+}
+
+haproxy h2 -wait
+
+# Scenario 3: "shutdown frontend" closes the nostop bind as well
+
+haproxy h3 -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+        nbthread 1
+    .endif
+
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend monitor
+        bind "fd@${monitor}" nostop
+        bind "fd@${plain}"
+        http-request return status 200
+} -start
+
+haproxy h3 -cli {
+    send "show info"
+    expect ~ "Unstoppable Jobs: 1"
+    send "shutdown frontend monitor; show info"
+    expect ~ "Unstoppable Jobs: 0"
+    send "shutdown frontend monitor"
+    expect ~ "Frontend was already shut down"
+}
+
+haproxy h3 -wait

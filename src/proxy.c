@@ -3843,11 +3843,26 @@ void proxy_cond_disable(struct proxy *p)
 {
 	long long cum_conn = 0;
 	long long cum_sess = 0;
+	int active = p->li_ready + p->li_paused;
 
 	if (p->flags & (PR_FL_DISABLED|PR_FL_STOPPED))
 		return;
 
-	if (p->li_ready + p->li_paused > 0)
+	if (active && stopping) {
+		/* "nostop" listeners must not keep the proxy from being marked
+		 * stopped, the muxes rely on it to close idle connections.
+		 * Same states as li_paused/li_ready in listener_set_state().
+		 */
+		struct listener *l;
+
+		list_for_each_entry(l, &p->conf.listeners, by_fe) {
+			if ((l->bind_conf->options & BC_O_NOSTOP) &&
+			    (l->state == LI_PAUSED || l->state >= LI_READY))
+				active--;
+		}
+	}
+
+	if (active > 0)
 		return;
 
 	p->flags |= PR_FL_STOPPED;

@@ -674,7 +674,12 @@ SIGTERM signal is sent to the haproxy process, it immediately quits and all
 established connections are closed. The graceful stop is triggered when the
 SIGUSR1 signal is sent to the haproxy process. It consists in only unbinding
 from listening ports, but continue to process existing connections until they
-close. Once the last connection is closed, the process leaves.
+close. Once the last connection is closed, the process leaves. Listeners
+declared with the "nostop" bind option are not unbound and accept connections
+until the process exits. This is meant for stats or health check frontends.
+On a reload, both the old and the new process then accept on that socket
+until the old one exits; see the "nostop" bind option in the configuration
+manual.
 
 The hard stop method is used for the "stop" or "restart" actions of the service
 management script. The graceful stop is used for the "reload" action which

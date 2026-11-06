@@ -379,10 +379,8 @@ void stop_listener(struct listener *l, int lpx, int lpr, int lli)
 {
 	struct proxy *px = l->bind_conf->frontend;
 
-	if (l->bind_conf->options & BC_O_NOSTOP) {
-		/* master-worker sockpairs and "nostop" listeners are never
-		 * closed but don't count as a job (see unstoppable_jobs).
-		 */
+	if ((l->bind_conf->options & BC_O_NOSTOP) && stopping) {
+		/* kept across a soft-stop only, see unstoppable_jobs */
 		return;
 	}
 
@@ -2930,6 +2928,13 @@ static int bind_parse_nice(char **args, int cur_arg, struct proxy *px, struct bi
 	return 0;
 }
 
+/* parse the "nostop" bind keyword */
+static int bind_parse_nostop(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
+{
+	conf->options |= BC_O_NOSTOP;
+	return 0;
+}
+
 /* parse the "process" bind keyword */
 static int bind_parse_process(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
 {
@@ -3097,6 +3102,7 @@ static struct bind_kw_list bind_kws = { "ALL", { }, {
 	{ "name",         bind_parse_name,         1, 1 }, /* set name of listening socket */
 	{ "nbconn",       bind_parse_nbconn,       1, 1 }, /* set number of connection on active preconnect */
 	{ "nice",         bind_parse_nice,         1, 0 }, /* set nice of listening socket */
+	{ "nostop",       bind_parse_nostop,       0, 0 }, /* keep listening during soft-stop */
 	{ "process",      bind_parse_process,      1, 0 }, /* set list of allowed process for this socket */
 	{ "proto",        bind_parse_proto,        1, 0 }, /* set the proto to use for all incoming connections */
 	{ "shards",       bind_parse_shards,       1, 0 }, /* set number of shards */
